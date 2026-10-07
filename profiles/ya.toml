@@ -1,0 +1,14 @@
+name = "Яндекс"
+description = "Главная ya.ru, статика yastatic.net, авторизация и реальная доставка CSS/JS"
+base_url = "https://ya.ru/"
+
+static_hosts = [
+  "ya.ru", "yandex.ru", "yastatic.net", "yastat.net", "passport.yandex.ru",
+  "mc.yandex.ru", "avatars.mds.yandex.net", "favicon.yandex.net",
+]
+
+discover_html = true
+check_assets = true
+asset_url_regex = '^https://([^/]+\.)?(yastatic\.net|ya\.ru)/'
+asset_count = 3
+min_asset_size = 32768

@@ -1,0 +1,29 @@
+name = "Z.AI API"
+description = "Доступность API Z.AI и функциональная POST-проба Anthropic-совместимого эндпоинта"
+base_url = "https://api.z.ai/"
+static_hosts = ["api.z.ai", "z.ai", "docs.z.ai"]
+probe_urls = ["https://api.z.ai/api/anthropic", "https://api.z.ai/api/paas/v4/"]
+
+# api.z.ai — API, а не веб-приложение: HTML-discovery и ассеты не нужны
+discover_html = false
+check_assets = false
+
+# Без ключа: любой ответ кроме 5xx доказывает, что маршрут до бэкенда жив.
+[[api_probe]]
+name = "Anthropic route (без ключа)"
+method = "POST"
+url = "https://api.z.ai/api/anthropic/v1/messages?beta=true"
+expect = "non5xx"
+skip_if_env = ["ZAI_API_KEY"]
+headers = { "anthropic-version" = "2023-06-01", "content-type" = "application/json" }
+body = '{"model":"${ZAI_PROBE_MODEL:-glm-4.7}","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}'
+
+# С ключом (переменная окружения ZAI_API_KEY): ждём 2xx. Тратит ничтожную часть квоты.
+[[api_probe]]
+name = "Anthropic functional (с ключом)"
+method = "POST"
+url = "https://api.z.ai/api/anthropic/v1/messages?beta=true"
+expect = "2xx"
+require_env = ["ZAI_API_KEY"]
+headers = { "x-api-key" = "${ZAI_API_KEY}", "anthropic-version" = "2023-06-01", "content-type" = "application/json" }
+body = '{"model":"${ZAI_PROBE_MODEL:-glm-4.7}","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}'

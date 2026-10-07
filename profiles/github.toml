@@ -1,0 +1,29 @@
+name = "GitHub"
+description = "Веб, API, CDN, загрузки, реестр пакетов и целостность крупных ассетов GitHub"
+base_url = "https://github.com/"
+
+static_hosts = [
+  "github.com", "api.github.com", "uploads.github.com", "gist.github.com",
+  "alive.github.com", "collector.github.com", "lfs.github.com",
+  "github.githubassets.com", "raw.githubusercontent.com", "avatars.githubusercontent.com",
+  "user-images.githubusercontent.com", "objects.githubusercontent.com",
+  "objects-origin.githubusercontent.com", "github-releases.githubusercontent.com",
+  "github-registry-files.githubusercontent.com", "release-assets.githubusercontent.com",
+  "codeload.github.com", "results-receiver.actions.githubusercontent.com",
+  "dependabot-actions.githubapp.com", "ghcr.io", "pkg-containers.githubusercontent.com",
+  "github-cloud.githubusercontent.com", "github-cloud.s3.amazonaws.com",
+]
+
+probe_urls = ["https://api.github.com/zen", "https://codeload.github.com/"]
+
+discover_html = true
+check_assets = true
+asset_url_regex = '^https://github\.githubassets\.com/assets/'
+asset_count = 3
+min_asset_size = 32768
+range_size = 4096
+
+# Дополнительные хосты из https://api.github.com/meta (все строки внутри "domains")
+[metadata]
+url = "https://api.github.com/meta"
+path = "domains"

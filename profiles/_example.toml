@@ -1,0 +1,33 @@
+# Шаблон профиля. Скопируйте в myservice.toml (без подчёркивания в начале) и поправьте.
+name = "Мой сервис"
+description = "Что доказывает этот профиль"
+base_url = "https://example.com/"
+
+# Хосты, которые обязаны работать, даже если их нет в HTML главной страницы
+static_hosts = ["example.com", "api.example.com", "downloads.example.com"]
+
+# Конкретные URL: 5xx = сбой, любой другой ответ = путь жив
+probe_urls = ["https://api.example.com/health"]
+
+# Дополнительные TCP-порты для проверки (по умолчанию 443 и 80)
+tcp_ports = [443, 80]
+
+discover_html = true        # искать зависимости в <script>/<link>/<img>/...
+check_assets = true         # проверять целостность крупных объектов
+asset_url_regex = '^https://cdn\.example\.com/'
+asset_count = 3
+min_asset_size = 32768      # 32 KiB — больше подозрительной границы обрыва 16 KiB
+range_size = 4096
+
+# [metadata]                # JSON-эндпоинт со списком доменов
+# url = "https://api.example.com/meta"
+# path = "domains"
+
+# [[api_probe]]             # синтетический запрос к API
+# name = "health POST"
+# method = "POST"
+# url = "https://api.example.com/v1/ping"
+# expect = "2xx"            # 2xx | non5xx | any | конкретный код, например "401"
+# require_env = ["EXAMPLE_TOKEN"]
+# headers = { "authorization" = "Bearer ${EXAMPLE_TOKEN}", "content-type" = "application/json" }
+# body = '{"ping": true}'

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Local verification output: logs and screenshots with machine-specific addresses
+_verify/
+verify.bat
+gui_test.bat
+tasks.bat
+
+# Exported reports
+webnetcheck_*.html
+webnetcheck_*.json
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+publish_prepare.bat
+publish.bat
