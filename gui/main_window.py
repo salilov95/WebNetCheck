@@ -132,8 +132,10 @@ class MainWindow(QMainWindow):
             "doh": self.settings.value("doh", "true") in (True, "true"),
             "ca": self.settings.value("ca", ""),
         }
-        saved_checks = self.settings.value("checks", ",".join(ALL_CHECKS))
-        self.enabled_checks = set(c for c in str(saved_checks).split(",") if c in ALL_CHECKS) or set(ALL_CHECKS)
+        # Храним список ВЫКЛЮЧЕННЫХ проверок: тогда проверка, появившаяся в новой версии,
+        # включена по умолчанию, а не пропадает из-за старых настроек.
+        off = set(c for c in str(self.settings.value("checks_off", "")).split(",") if c in ALL_CHECKS)
+        self.enabled_checks = set(ALL_CHECKS) - off or set(ALL_CHECKS)
 
         self.setWindowTitle(f"WebNetCheck {__version__}")
         self.setWindowIcon(app_icon())
@@ -446,7 +448,7 @@ class MainWindow(QMainWindow):
         s.setValue("family", self.family.currentData())
         s.setValue("route", self.route.currentData())
         s.setValue("proxy", self.proxy.text())
-        s.setValue("checks", ",".join(sorted(self.enabled_checks)))
+        s.setValue("checks_off", ",".join(sorted(set(ALL_CHECKS) - self.enabled_checks)))
         for k, v in self.opts.items():
             s.setValue(k, v)
 
