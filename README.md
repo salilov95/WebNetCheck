@@ -1,5 +1,6 @@
 # WebNetCheck
 
+[![tests](https://github.com/salilov95/WebNetCheck/actions/workflows/tests.yml/badge.svg)](https://github.com/salilov95/WebNetCheck/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![platform: Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)
 ![python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)
@@ -134,6 +135,8 @@ build_exe.bat
 Перед сборкой закройте окно программы: открытый exe блокирует свои файлы, и скрипт остановится с `BUILD FAILED`.
 
 `rebuild_and_test.bat` делает полный цикл: тесты, сборка, прогон обоих exe. Результаты пишутся в `_verify\`.
+
+Релизы собирает GitHub Actions: при пуше тега `v*` workflow `release` собирает оба exe на Windows и прикладывает архивы к релизу.
 
 ## Тесты
 

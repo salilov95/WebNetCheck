@@ -1,0 +1,52 @@
+name: release
+
+# Builds both exe folders on Windows and attaches them to a GitHub Release
+# whenever a version tag (v1.2.3) is pushed.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt "pyinstaller>=6.3"
+      - name: Unit tests
+        run: python -m unittest discover -s tests
+      - name: Build GUI exe
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name WebNetCheck
+          --icon assets\webnetcheck.ico --collect-submodules dns
+          --add-data "profiles;profiles" app.py
+      - name: Build CLI exe
+        run: >
+          pyinstaller --noconfirm --clean --console --name webnetcheck-cli
+          --icon assets\webnetcheck.ico --collect-submodules dns --exclude-module PySide6
+          --add-data "profiles;profiles" cli.py
+      - name: Smoke test and package
+        shell: pwsh
+        run: |
+          Copy-Item profiles dist\WebNetCheck\profiles -Recurse -Force
+          Copy-Item profiles dist\webnetcheck-cli\profiles -Recurse -Force
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md dist\WebNetCheck\
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md dist\webnetcheck-cli\
+          & dist\webnetcheck-cli\webnetcheck-cli.exe --list-profiles
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          Compress-Archive -Path dist\WebNetCheck -DestinationPath "WebNetCheck-$v-win64.zip"
+          Compress-Archive -Path dist\webnetcheck-cli -DestinationPath "webnetcheck-cli-$v-win64.zip"
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          gh release create "${{ github.ref_name }}" "WebNetCheck-$v-win64.zip" "webnetcheck-cli-$v-win64.zip" --title "WebNetCheck $v" --notes-file .github/release-notes.md --verify-tag
