@@ -1,0 +1,35 @@
+name = "YouTube"
+description = "Сайт, API, превью и видеосерверы YouTube; QUIC и тест замедления по имени googlevideo.com"
+base_url = "https://www.youtube.com/"
+
+static_hosts = [
+  "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com",
+  "www.youtube-nocookie.com", "youtubei.googleapis.com",
+  "i.ytimg.com", "yt3.ggpht.com",
+  "redirector.googlevideo.com", "manifest.googlevideo.com",
+]
+
+# Браузер ходит на YouTube по HTTP/3; видео отдают серверы *.googlevideo.com
+quic_hosts = ["www.youtube.com", "redirector.googlevideo.com"]
+
+discover_html = true
+check_assets = true
+asset_url_regex = '^https://(www\.youtube\.com|i\.ytimg\.com)/'
+asset_count = 2
+min_asset_size = 32768
+range_size = 4096
+
+# Замедление YouTube привязано к имени *.googlevideo.com в SNI.
+# Один и тот же объект качается с одного сервера дважды: с настоящим именем и с именем
+# googlevideo. Отличается только SNI — разница в скорости и есть замедление. Если сервер
+# и с нейтральным чужим именем ведёт себя так же, проверка пропускается без вывода.
+# Два сервера: Google и сторонний. Ограничение может зависеть ещё и от адреса сервера.
+[[speed_test]]
+name = "googlevideo.com · сервер Google"
+url = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+sni = "test.googlevideo.com"
+
+[[speed_test]]
+name = "googlevideo.com · сторонний сервер"
+url = "https://mirror.yandex.ru/debian/ls-lR.gz"
+sni = "test.googlevideo.com"

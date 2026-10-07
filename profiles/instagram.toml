@@ -1,0 +1,19 @@
+name = "Instagram"
+description = "Сайт, API и CDN Instagram; QUIC и UDP для звонков"
+base_url = "https://www.instagram.com/"
+
+static_hosts = [
+  "www.instagram.com", "instagram.com", "i.instagram.com", "graph.instagram.com",
+  "api.instagram.com", "static.cdninstagram.com", "scontent.cdninstagram.com",
+  "edge-chat.instagram.com", "gateway.instagram.com",
+]
+
+udp_needed = "аудио- и видеозвонки"
+quic_hosts = ["www.instagram.com", "static.cdninstagram.com"]
+
+discover_html = true
+check_assets = true
+asset_url_regex = '^https://static\.cdninstagram\.com/'
+asset_count = 2
+min_asset_size = 32768
+range_size = 4096

@@ -1,0 +1,26 @@
+name = "Discord"
+description = "Сайт, API, gateway (чат), CDN и медиа Discord; UDP для голоса и QUIC"
+base_url = "https://discord.com/"
+
+# Текст и чат идут по TCP/443: сайт, REST API и WebSocket-gateway. Картинки и вложения — с CDN.
+static_hosts = [
+  "discord.com", "discordapp.com", "discord.gg", "gateway.discord.gg",
+  "cdn.discordapp.com", "media.discordapp.net", "images-ext-1.discordapp.net",
+  "dl.discordapp.net", "status.discord.com",
+]
+
+# Публичный эндпоинт без авторизации: отдаёт адрес gateway
+probe_urls = ["https://discord.com/api/v9/gateway"]
+
+# Голос, видео и демонстрация экрана идут по UDP на голосовые серверы (*.discord.media).
+# Без входа в аккаунт голосовой сервер проверить нельзя, поэтому проверяется сам UDP
+# и то, идёт ли он тем же путём, что и TCP.
+udp_needed = "голосовые каналы, видео и демонстрация экрана"
+quic_hosts = ["discord.com"]
+
+discover_html = true
+check_assets = true
+asset_url_regex = '^https://([^/]+\.)?(discord\.com|discordapp\.com)/'
+asset_count = 2
+min_asset_size = 32768
+range_size = 4096

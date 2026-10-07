@@ -31,3 +31,16 @@ range_size = 4096
 # require_env = ["EXAMPLE_TOKEN"]
 # headers = { "authorization" = "Bearer ${EXAMPLE_TOKEN}", "content-type" = "application/json" }
 # body = '{"ping": true}'
+
+# Что в сервисе работает по UDP. Если задано, вывод объяснит, что будет с этими функциями,
+# когда UDP закрыт или идёт мимо прокси.
+# udp_needed = "голосовые звонки"
+
+# Хосты, от которых ждём ответа по QUIC (HTTP/3, UDP/443). Основной хост проверяется всегда.
+# quic_hosts = ["example.com", "cdn.example.com"]
+
+# [[speed_test]]            # замедление по имени: объект качается с настоящим SNI и с проверяемым
+# name = "video.example.com"
+# url = "https://files.example.com/big.bin"   # объект от 256 KiB на сервере, который отвечает на оба имени
+# sni = "video.example.com"                   # имя, которое подставляется в ClientHello
+# connect = "files.example.com"               # куда подключаться (по умолчанию — хост из url)
