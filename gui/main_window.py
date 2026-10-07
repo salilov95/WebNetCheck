@@ -32,11 +32,15 @@ CHECK_NAMES = {
     "tcp": "TCP-порты",
     "tls": "TLS: сертификат, версии, SNI",
     "http": "HTTP: код, фазы, редиректы",
+    "udp": "UDP наружу (STUN)",
+    "quic": "QUIC / HTTP/3 (UDP/443)",
     "hosts": "Хосты сервиса и зависимости",
     "api": "API-пробы профиля",
     "content": "Целостность крупных объектов",
+    "speed": "Замедление по имени (профиль)",
 }
-STAGE_LAYER = {0: "proxy", 1: "dns", 2: "icmp", 3: "tcp", 4: "tls", 5: "http", 6: "hosts", 7: "api", 8: "content"}
+STAGE_LAYER = {0: "proxy", 1: "dns", 2: "icmp", 3: "tcp", 4: "tls", 5: "http", 6: "udp", 7: "hosts", 8: "api",
+               9: "content"}
 FAMILIES = [("auto", "IPv4 + IPv6"), ("v4", "Только IPv4"), ("v6", "Только IPv6")]
 ROUTES = [("direct", "Напрямую"), ("system", "Через системный прокси"), ("manual", "Через указанный прокси"),
           ("both", "Сравнить: прокси и напрямую")]

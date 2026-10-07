@@ -22,6 +22,16 @@ class ApiProbe:
 
 
 @dataclass
+class SpeedTest:
+    """Замер скорости: один объект качается с настоящим SNI и с проверяемым (sni)."""
+    name: str
+    url: str
+    sni: str = ""                     # имя, которое подставляется в ClientHello вместо хоста из URL
+    connect: str = ""                 # к какому хосту подключаться (пусто = хост из URL)
+    max_bytes: int = 4 * 1024 * 1024
+
+
+@dataclass
 class Profile:
     key: str
     name: str
@@ -39,6 +49,9 @@ class Profile:
     metadata_path: str = ""
     tcp_ports: list[int] = field(default_factory=list)
     api_probes: list[ApiProbe] = field(default_factory=list)
+    udp_needed: str = ""              # что в сервисе работает по UDP («голосовые каналы») — для вывода
+    quic_hosts: list[str] = field(default_factory=list)
+    speed_tests: list[SpeedTest] = field(default_factory=list)
     path: str = ""
 
 
@@ -70,6 +83,9 @@ def _load(path: Path) -> Profile:
                        body=p.get("body"), require_env=p.get("require_env", []),
                        skip_if_env=p.get("skip_if_env", []))
               for p in d.get("api_probe", [])]
+    speeds = [SpeedTest(name=t.get("name", t["url"]), url=t["url"], sni=t.get("sni", ""),
+                        connect=t.get("connect", ""), max_bytes=int(t.get("max_bytes", 4 * 1024 * 1024)))
+              for t in d.get("speed_test", [])]
     meta = d.get("metadata", {})
     return Profile(
         key=path.stem, name=d.get("name", path.stem), description=d.get("description", ""),
@@ -79,7 +95,8 @@ def _load(path: Path) -> Profile:
         asset_count=int(d.get("asset_count", 3)), min_asset_size=int(d.get("min_asset_size", 32 * 1024)),
         range_size=int(d.get("range_size", 4096)), metadata_url=meta.get("url", ""),
         metadata_path=meta.get("path", ""), tcp_ports=[int(p) for p in d.get("tcp_ports", [])],
-        api_probes=probes, path=str(path),
+        api_probes=probes, udp_needed=d.get("udp_needed", ""), quic_hosts=d.get("quic_hosts", []),
+        speed_tests=speeds, path=str(path),
     )
 
 

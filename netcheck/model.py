@@ -37,6 +37,7 @@ LAYERS: list[tuple[str, str]] = [
     ("tcp", "TCP"),
     ("tls", "TLS"),
     ("http", "HTTP"),
+    ("udp", "UDP / QUIC"),
     ("hosts", "Зависимости"),
     ("api", "API-пробы"),
     ("content", "Целостность"),

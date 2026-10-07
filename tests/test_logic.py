@@ -209,5 +209,193 @@ class ExternalIp(unittest.TestCase):
         self.assertIn("Браузер и прямое подключение выходят в интернет по-разному", titles(r))
 
 
+class Udp(unittest.TestCase):
+    def test_stun_xor_mapped(self):
+        import struct
+        from netcheck.udp import MAGIC, build_request, parse_response
+        req, txid = build_request(b"0123456789ab")
+        self.assertEqual(len(req), 20)
+        port = 54321 ^ (MAGIC >> 16)
+        ip = bytes(a ^ b for a, b in zip(socket.inet_aton("203.0.113.9"), struct.pack("!I", MAGIC)))
+        attr = struct.pack("!HHBBH", 0x0020, 8, 0, 1, port) + ip
+        resp = struct.pack("!HHI", 0x0101, len(attr), MAGIC) + txid + attr
+        self.assertEqual(parse_response(resp, txid), ("203.0.113.9", 54321))
+        self.assertIsNone(parse_response(resp, b"x" * 12))          # чужой transaction id
+
+    def test_stun_probe_against_local_server(self):
+        import struct
+        import threading
+        from netcheck.udp import MAGIC, probe
+        srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.settimeout(3)
+
+        def serve():
+            data, addr = srv.recvfrom(2048)
+            ip = bytes(a ^ b for a, b in zip(socket.inet_aton(addr[0]), struct.pack("!I", MAGIC)))
+            attr = struct.pack("!HHBBH", 0x0020, 8, 0, 1, addr[1] ^ (MAGIC >> 16)) + ip
+            srv.sendto(struct.pack("!HHI", 0x0101, len(attr), MAGIC) + data[8:20] + attr, addr)
+
+        th = threading.Thread(target=serve)
+        th.start()
+        dead = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)   # занят, но молчит
+        dead.bind(("127.0.0.1", 0))
+        try:
+            got = probe((("127.0.0.1", srv.getsockname()[1]), ("127.0.0.1", dead.getsockname()[1])),
+                        timeout=0.4, attempts=1)
+        finally:
+            th.join()
+            srv.close()
+            dead.close()
+        self.assertTrue(got[0].ok)
+        self.assertEqual(got[0].mapped_ip, "127.0.0.1")
+        self.assertFalse(got[1].ok)
+        self.assertEqual(got[1].error, "timeout")
+
+
+class Quic(unittest.TestCase):
+    DCID = bytes.fromhex("8394c8f03e515708")       # RFC 9001, приложение A
+
+    def test_initial_keys_rfc9001(self):
+        from netcheck.quic import initial_keys
+        c, s = initial_keys(self.DCID, "client"), initial_keys(self.DCID, "server")
+        self.assertEqual(c.key.hex(), "1f369613dd76d5467730efcbe3b1a22d")
+        self.assertEqual(c.iv.hex(), "fa044b2f42a3fd3b46fb255c")
+        self.assertEqual(c.hp.hex(), "9f50449e04a0e810283a1e9933adedd2")
+        self.assertEqual(s.key.hex(), "cf3a5331653c364c88f0f379b6067e37")
+        self.assertEqual(s.iv.hex(), "0ac1493ca1905853b0bba03e")
+        self.assertEqual(s.hp.hex(), "c206b8d9b9f0f37644430b490eeaa314")
+
+    def test_initial_roundtrip_carries_sni(self):
+        from netcheck import quic
+        scid = b"\x01" * 8
+        pkt = quic.build_initial(self.DCID, scid, "discord.com")
+        self.assertGreaterEqual(len(pkt), 1200)                   # RFC 9000 §14.1
+        self.assertNotIn(b"discord.com", pkt)                     # имя зашифровано, но ключ выводится из DCID
+        p = quic.parse_packet(pkt, quic.initial_keys(self.DCID, "client"))
+        self.assertEqual((p.kind, p.dcid, p.scid), ("initial", self.DCID, scid))
+        self.assertEqual(p.payload[0], 0x06)                      # CRYPTO
+        n, pos = quic.read_varint(p.payload, 2)
+        self.assertEqual(quic.sni_of(p.payload[pos:pos + n]), "discord.com")
+
+    def test_server_frames(self):
+        from netcheck.quic import describe_frames, parse_packet, varint
+        self.assertEqual(describe_frames(b"\x02\x00\x00\x00\x00" + b"\x06\x00\x01\x02")[0], "handshake")
+        close = b"\x1c" + varint(0x100 + 112) + b"\x06" + varint(2) + b"no"
+        kind, text = describe_frames(close)
+        self.assertEqual(kind, "close")
+        self.assertIn("unrecognized_name", text)
+        self.assertEqual(parse_packet(b"\x00garbage").kind, "garbage")
+        vn = b"\x80\x00\x00\x00\x00\x01\xaa\x01\xbb\x00\x00\x00\x01\x6b\x33\x43\xcf"
+        self.assertEqual(parse_packet(vn).versions, (1, 0x6B3343CF))
+
+    def test_varint(self):
+        from netcheck.quic import read_varint, varint
+        for n in (0, 63, 64, 16383, 16384, 2 ** 30 - 1, 2 ** 30):
+            self.assertEqual(read_varint(varint(n), 0)[0], n)
+
+
+class Speed(unittest.TestCase):
+    def _r(self, **kw):
+        from netcheck.speedtest import SpeedResult
+        base = dict(url="u", status=200, received=4 << 20, seconds=2.0, kbps=2048.0)
+        base.update(kw)
+        return SpeedResult(**base)
+
+    def test_verdicts(self):
+        from netcheck.speedtest import verdict
+        self.assertEqual(verdict(self._r(), self._r(kbps=1900.0))[0], "ok")
+        self.assertEqual(verdict(self._r(), self._r(kbps=60.0, received=480 << 10))[0], "throttled")
+        self.assertEqual(verdict(self._r(), self._r(kbps=2.0, received=16384, stalled=True))[0], "throttled")
+        self.assertEqual(verdict(self._r(), self._r(status=None, received=0, kbps=None, error="reset",
+                                                    error_text="tls: reset"))[0], "blocked")
+        # контроль не удался — вывода нет, даже если тест «медленный»
+        self.assertEqual(verdict(self._r(status=404, received=100), self._r(kbps=1.0))[0], "inconclusive")
+        self.assertEqual(verdict(self._r(received=1000), self._r(kbps=1.0))[0], "inconclusive")
+
+    def test_measure_local_http(self):
+        import http.server
+        import threading
+        from netcheck.speedtest import measure
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/r":
+                    self.send_response(302)
+                    self.send_header("Location", "/blob")
+                    self.end_headers()
+                    return
+                body = b"x" * 300_000
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            r = measure(f"http://localhost:{srv.server_port}/r", ip="127.0.0.1", timeout=3)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        self.assertTrue(r.ok)
+        self.assertEqual((r.received, r.complete, len(r.redirects)), (300_000, True, 1))
+
+
+class BlockDiagnosis(unittest.TestCase):
+    def test_ip_block_when_control_ok(self):
+        r = report(Check("tcp", "TCP 443", "ip", Status.FAIL, tags=["tcp_timeout", "tcp_main_timeout"]),
+                   Check("tcp", "Контроль", "x", Status.INFO, tags=["control_ok"]))
+        self.assertIn("Адреса сервиса недоступны, интернет работает", titles(r))
+
+    def test_quic_filtered_but_tcp_ok(self):
+        r = report(Check("tls", "TLS", "ip", Status.OK, tags=["tls_ok", "direct"]),
+                   Check("udp", "QUIC", "www.youtube.com", Status.FAIL, tags=["quic_sni_filtered"]))
+        self.assertIn("QUIC (HTTP/3) не проходит, TCP — проходит", titles(r))
+
+    def test_throttling(self):
+        r = report(Check("content", "Скорость", "test.googlevideo.com", Status.FAIL, "60 против 2000",
+                         tags=["speed_throttled", "direct"]))
+        self.assertEqual(titles(r)[0], "Замедление по имени (SNI)")
+
+    def test_voice_bypasses_proxy(self):
+        udp = Check("udp", "UDP", "интернет", Status.OK,
+                    details={"В этом сервисе по UDP": "голосовые каналы", "Внешний адрес по UDP": "A",
+                             "Внешний адрес через прокси (TCP)": "B"},
+                    tags=["udp_needed", "udp_ok", "udp_bypasses_proxy"])
+        calm = report(udp, Check("http", "GET", "u", Status.OK, tags=["http_ok", "direct"]))
+        d = [x for x in diagnose(calm) if x.title == "UDP идёт мимо прокси"][0]
+        self.assertEqual(d.severity, Status.INFO)                 # прямой путь свободен — не проблема
+        blocked = report(udp, Check("tls", "TLS", "ip", Status.INFO, tags=["tls_fail", "tls_sni_filtered", "direct"]),
+                         Check("http", "GET", "u", Status.OK, tags=["http_ok", "via_proxy"]))
+        d = [x for x in diagnose(blocked) if x.title == "UDP идёт мимо прокси"][0]
+        self.assertEqual(d.severity, Status.WARN)
+
+    def test_udp_blocked(self):
+        r = report(Check("udp", "UDP", "интернет", Status.WARN, tags=["udp_blocked"]))
+        self.assertIn("UDP наружу не проходит", titles(r))
+
+    def test_geo_block_by_service(self):
+        r = report(Check("http", "GET", "u", Status.WARN, tags=["http_403", "direct"]),
+                   Check("http", "GET", "u", Status.OK, tags=["http_ok", "via_proxy"]))
+        self.assertIn("Сервис не пускает с вашего адреса", titles(r))
+
+
+class Profiles(unittest.TestCase):
+    def test_builtin_profiles_load(self):
+        from netcheck.profiles import load_all
+        ps = load_all()
+        for key in ("discord", "youtube", "instagram", "github", "ya", "zai"):
+            self.assertIn(key, ps)
+            self.assertNotIn("ошибка", ps[key].name)
+        self.assertTrue(ps["discord"].udp_needed)
+        tests = ps["youtube"].speed_tests
+        self.assertEqual(len(tests), 2)
+        self.assertEqual({st.sni for st in tests}, {"test.googlevideo.com"})
+
+
 if __name__ == "__main__":
     unittest.main()

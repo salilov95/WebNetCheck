@@ -15,6 +15,9 @@ from urllib.parse import urlsplit
 from . import __version__
 from . import extip
 from . import icmp as icmpmod
+from . import quic as quicmod
+from . import speedtest
+from . import udp as udpmod
 from .diagnosis import diagnose
 from .discovery import discover, hosts_of, json_strings
 from .dnscheck import investigate
@@ -26,7 +29,13 @@ from .proxysettings import (bypassed, env_route, pac_candidates, parse_manual, r
 from .transport import DIRECT, NetError, Route, interception_marker, open_stream, tls_wrap
 from .util import ERROR_TEXT, fmt_ms, human_bytes, ip_kind, is_ip_literal
 
-ALL_CHECKS = ("proxy", "extip", "dns", "icmp", "trace", "pmtu", "tcp", "tls", "http", "hosts", "api", "content")
+ALL_CHECKS = ("proxy", "extip", "dns", "icmp", "trace", "pmtu", "tcp", "tls", "http", "udp", "quic", "hosts", "api",
+              "content", "speed")
+
+# Куда стучимся, чтобы отличить «интернета нет» от «недоступен именно этот сервис»
+TCP_CONTROL = (("1.1.1.1", 443), ("8.8.8.8", 443), ("77.88.8.8", 443))
+QUIC_CONTROL = ("www.google.com", "cloudflare.com", "yandex.ru")
+NEUTRAL_SNI = "www.example.com"
 
 
 @dataclass
@@ -71,8 +80,8 @@ def normalize_target(t: str) -> str:
 class Engine:
     """Один прогон диагностики. Запускать run() в фоновом потоке."""
 
-    STAGES = ["Среда и прокси", "DNS", "ICMP и маршрут", "TCP", "TLS", "HTTP", "Зависимости",
-              "API-пробы", "Целостность контента", "Диагноз"]
+    STAGES = ["Среда и прокси", "DNS", "ICMP и маршрут", "TCP", "TLS", "HTTP", "UDP и QUIC", "Зависимости",
+              "API-пробы", "Контент и скорость", "Диагноз"]
 
     def __init__(self, opts: Options, on_event=None, profiles: dict[str, Profile] | None = None):
         self.o = opts
@@ -121,7 +130,7 @@ class Engine:
             self._check(Check("http", "Запуск проверки", base_url or "-", Status.FAIL,
                               f"не удалось начать: {e}", tags=["fatal"]))
         self.report.cancelled = self.cancelled
-        self._stage(9)
+        self._stage(len(self.STAGES) - 1)
         try:
             self.report.diagnosis = diagnose(self.report)
         except Exception as e:  # noqa: BLE001
@@ -189,6 +198,14 @@ class Engine:
             return
 
         self._stage(6)
+        if o.enabled("udp"):
+            self._udp_layer()
+        if o.enabled("quic") and not self.cancelled:
+            self._quic_layer()
+        if self.cancelled:
+            return
+
+        self._stage(7)
         self.resources: list[tuple[str, str]] = []
         if self.main_page is not None and self.main_page.body:
             self._discover()
@@ -197,15 +214,17 @@ class Engine:
         if self.cancelled:
             return
 
-        self._stage(7)
+        self._stage(8)
         if o.enabled("api"):
             self._api_layer()
         if self.cancelled:
             return
 
-        self._stage(8)
+        self._stage(9)
         if o.enabled("content"):
             self._content_layer()
+        if o.enabled("speed") and not self.cancelled:
+            self._speed_layer()
 
     # --- среда ------------------------------------------------------------
     def _environment(self):
@@ -282,6 +301,8 @@ class Engine:
                 sysroute = pr
         if not sysroute:
             sysroute = env_route(settings)
+        self.sysroute = sysroute
+        self.extips: dict[str, extip.ExternalIP] = {}
         if o.enabled("extip") and not self.cancelled:
             self._external_ip(sysroute)
 
@@ -331,6 +352,7 @@ class Engine:
                                "Город": ext.city or "-", "Страна": ext.country or "-",
                                "Источник": ext.source, "Маршрут": route.label},
                               tags=[f"extip_{kind}"]))
+        self.extips = found
         d, p = found.get("direct"), found.get("proxy")
         if d and p and d.ip != p.ip:
             self._check(Check("proxy", "Выход напрямую и через прокси", "интернет", Status.INFO,
@@ -494,6 +516,23 @@ class Engine:
                     self._check(Check("tcp", f"TCP {port}", ip, self._soft(st), hint,
                                       {"Адрес": f"{ip}:{port}", "Ошибка": text, "Код": code}, ms, fam,
                                       [f"tcp_{code}"] + ([f"tcp_main_{code}"] if main else [])))
+            main_jobs = [j for j in jobs if j[2] == t.port]
+            if main_jobs and all(j[3].result()[1] is not None for j in main_jobs) and not self.cancelled:
+                self._tcp_control(ex)
+
+    def _tcp_control(self, ex):
+        """Основной порт недоступен: есть ли вообще интернет по TCP — или закрыт именно этот сервис."""
+        res = [(ip, port, f) for ip, port, f in ((i, p, ex.submit(self._tcp_one, i, p)) for i, p in TCP_CONTROL)]
+        ok = [f"{ip}:{port} за {fmt_ms(f.result()[0])}" for ip, port, f in res if f.result()[1] is None]
+        d = {"Проверены": ", ".join(f"{ip}:{port}" for ip, port, _ in res), "Ответили": ok or "никто"}
+        if ok:
+            self._check(Check("tcp", "Контроль: другие адреса", "интернет", Status.INFO,
+                              f"интернет по TCP есть ({len(ok)} из {len(res)}) — недоступны именно адреса сервиса",
+                              d, tags=["control_ok"]))
+        else:
+            self._check(Check("tcp", "Контроль: другие адреса", "интернет", Status.INFO,
+                              "контрольные адреса тоже недоступны — похоже, прямого выхода в интернет нет",
+                              d, tags=["control_fail"]))
 
     def _tcp_one(self, ip, port):
         t0 = time.perf_counter()
@@ -724,6 +763,194 @@ class Engine:
             self._check(Check("http", "HTTP/3 (QUIC)", r.final_url, Status.INFO,
                               "сервер анонсирует HTTP/3: браузер может пойти по UDP/443 — здесь проверяется TCP",
                               {"Alt-Svc": alt}, tags=["quic_advertised"]))
+
+    # --- UDP / QUIC -----------------------------------------------------------
+    def _udp_layer(self):
+        """Ходит ли UDP наружу и с какого адреса. Всегда напрямую: HTTP-прокси UDP не переносит."""
+        p = self.profile
+        replies = udpmod.probe(timeout=min(self.o.timeout, 2.0), cancel=self.cancel)
+        ok = [r for r in replies if r.ok]
+        d = {r.server: (f"{r.mapped_ip}:{r.mapped_port} за {fmt_ms(r.rtt_ms)}" if r.ok else
+                        {"dns": "имя сервера не разрешилось", "timeout": "нет ответа"}.get(r.error, r.error))
+             for r in replies}
+        tags = []
+        if p and p.udp_needed:
+            tags.append("udp_needed")
+            d["В этом сервисе по UDP"] = p.udp_needed
+        if all(r.error == "dns" for r in replies):
+            self._check(Check("udp", "UDP наружу (STUN)", "интернет", Status.SKIP,
+                              "имена STUN-серверов не разрешились — проверить UDP нечем", d, tags=tags))
+            return
+        if not ok:
+            self._check(Check("udp", "UDP наружу (STUN)", "интернет", Status.WARN,
+                              "UDP не проходит: ни один STUN-сервер не ответил", d, tags=tags + ["udp_blocked"]))
+            return
+        ips = list(dict.fromkeys(r.mapped_ip for r in ok))
+        ports = {r.mapped_port for r in ok}
+        mapped = ips[0]
+        d["Внешний адрес по UDP"] = ", ".join(ips)
+        if len(ok) > 1:
+            d["NAT"] = ("для разных серверов разные порты (симметричный NAT) — прямые P2P-соединения затруднены"
+                        if len(ports) > 1 else "один и тот же порт для разных серверов — NAT не мешает P2P")
+        tags += ["udp_ok"]
+        summ = f"проходит, внешний адрес {mapped} (ответили {len(ok)} из {len(replies)})"
+        direct, proxy = self.extips.get("direct"), self.extips.get("proxy")
+        if proxy:
+            d["Внешний адрес через прокси (TCP)"] = proxy.ip
+        if direct:
+            d["Внешний адрес напрямую (TCP)"] = direct.ip
+        if proxy and proxy.ip not in ips:
+            tags.append("udp_bypasses_proxy")
+            summ += " — мимо системного прокси"
+        elif proxy:
+            tags.append("udp_via_tunnel")
+        avg = sum(r.rtt_ms for r in ok) / len(ok)
+        self._check(Check("udp", "UDP наружу (STUN)", "интернет", Status.OK, summ, d, avg, tags=tags))
+
+    def _quic_layer(self):
+        """Проба QUIC Initial на UDP/443 с настоящим SNI. Только напрямую."""
+        o, t, p = self.o, self.t, self.profile
+        advertised = any("quic_advertised" in c.tags for c in self.report.checks)
+        if any("udp_blocked" in c.tags for c in self.report.checks):
+            self._check(Check("udp", "QUIC (HTTP/3)", t.host, Status.SKIP,
+                              "UDP наружу не проходит вообще — QUIC проверять бессмысленно"))
+            return
+        targets: list[tuple[str, str, str, bool]] = []      # host, ip, family, ожидается ли QUIC
+        listed = [h.lower() for h in (p.quic_hosts if p else [])]
+        if t.is_https and t.port == 443 and not is_ip_literal(t.host):
+            for fam, ips in self._families():
+                targets.append((t.host, ips[0], fam, advertised or t.host.lower() in listed))
+        for h in listed:
+            if h == t.host.lower() or o.family == "v6":
+                continue
+            try:
+                ip = socket.getaddrinfo(h, 443, socket.AF_INET, socket.SOCK_DGRAM)[0][4][0]
+            except OSError:
+                self._check(Check("udp", "QUIC (HTTP/3)", h, Status.SKIP, "имя не разрешилось", family="IPv4"))
+                continue
+            targets.append((h, ip, "IPv4", True))
+        control: list[str | None] = []                       # ленивый кэш: [] = ещё не проверяли
+
+        def control_host() -> str | None:
+            if not control:
+                found = None
+                for h in QUIC_CONTROL:
+                    try:
+                        ip = socket.getaddrinfo(h, 443, socket.AF_INET, socket.SOCK_DGRAM)[0][4][0]
+                    except OSError:
+                        continue
+                    if quicmod.probe(ip, h, timeout=2.0, cancel=self.cancel).answered:
+                        found = h
+                        break
+                control.append(found)
+            return control[0]
+
+        tmo = min(o.timeout, 3.0)
+        for host, ip, fam, expected in targets:
+            if self.cancelled:
+                return
+            r = quicmod.probe(ip, host, timeout=tmo, cancel=self.cancel)
+            d = {"Адрес": f"{ip}:443/udp", "SNI": host, "Отправлено Initial": r.sent, "Ответ": r.detail or "-"}
+            title = "QUIC (HTTP/3)"
+            if r.answered:
+                self._check(Check("udp", title, host, Status.OK, f"сервер отвечает по QUIC за {fmt_ms(r.rtt_ms)}",
+                                  d, r.rtt_ms, fam, ["quic_ok"]))
+                continue
+            alt = quicmod.probe(ip, NEUTRAL_SNI, timeout=2.0, cancel=self.cancel)
+            d[f"С нейтральным SNI ({NEUTRAL_SNI})"] = alt.detail or "-"
+            if alt.answered:
+                self._check(Check("udp", title, host, self._soft(Status.FAIL),
+                                  "с настоящим именем ответа нет, с нейтральным — есть: QUIC режется по SNI",
+                                  d, family=fam, tags=["quic_sni_filtered"]))
+                continue
+            ctl = control_host()
+            d["Контроль QUIC"] = f"{ctl} отвечает" if ctl else "не ответил ни один из: " + ", ".join(QUIC_CONTROL)
+            if not ctl:
+                self._check(Check("udp", title, host, Status.WARN if expected else Status.INFO,
+                                  "UDP/443 не проходит ни к этому серверу, ни к контрольным — QUIC закрыт целиком",
+                                  d, family=fam, tags=["quic_udp443_closed"]))
+            elif expected:
+                self._check(Check("udp", title, host, self._soft(Status.WARN),
+                                  "ответа нет, хотя сервис поддерживает HTTP/3, а к другим серверам QUIC проходит",
+                                  d, family=fam, tags=["quic_blocked"]))
+            else:
+                self._check(Check("udp", title, host, Status.INFO,
+                                  "сервер не отвечает по QUIC — скорее всего, не поддерживает HTTP/3",
+                                  d, family=fam, tags=["quic_unsupported"]))
+
+    # --- скорость ---------------------------------------------------------------
+    def _speed_layer(self):
+        """Замедление по имени: один объект с одного сервера — с настоящим SNI и с проверяемым."""
+        o, p = self.o, self.profile
+        if not p or not p.speed_tests:
+            return
+        for st in p.speed_tests:
+            host = st.connect or (urlsplit(st.url).hostname or "")
+            for route in self.routes:
+                if self.cancelled:
+                    return
+                ip = None
+                if not route.is_proxy:
+                    try:
+                        fam_af = socket.AF_INET6 if o.family == "v6" else socket.AF_INET
+                        ip = socket.getaddrinfo(host, 443, fam_af, socket.SOCK_STREAM)[0][4][0]
+                    except OSError:
+                        self._check(Check("content", f"Скорость · {st.name}", host, Status.SKIP,
+                                          f"имя {host} не разрешилось", tags=["speed_inconclusive"]))
+                        continue
+                self._speed_one(st, route, ip)
+
+    def _speed_one(self, st, route, ip):
+        o = self.o
+        kw = dict(route=route, ip=ip, connect_host=st.connect or None, timeout=o.timeout, window=8.0,
+                  stall=min(o.stall_timeout, 5.0), max_bytes=st.max_bytes, ca_file=o.ca_file, cancel=self.cancel)
+        title = f"Скорость · {st.name}" + (f" · {route.label}" if route.is_proxy else "")
+        rtags = ["via_proxy"] if route.is_proxy else ["direct"]
+
+        def line(r: speedtest.SpeedResult) -> str:
+            if r.error and not r.received:
+                return r.error_text
+            s = f"HTTP {r.status}, {human_bytes(r.received)} за {r.seconds:.1f} s"
+            if r.kbps:
+                s += f" = {r.kbps:.0f} KiB/s"
+            return s + (" · передача замерла" if r.stalled else "")
+
+        control = speedtest.measure(st.url, **kw)
+        d = {"Объект": st.url, "Сервер": f"{st.connect or urlsplit(st.url).hostname} ({ip or route.label})",
+             "С настоящим именем": line(control)}
+        if self.cancelled:
+            return
+        if not st.sni:
+            if control.ok and control.received and not control.stalled:
+                self._check(Check("content", title, st.url, Status.OK, line(control), d, tags=["speed_ok"] + rtags))
+            else:
+                self._check(Check("content", title, st.url, self._soft(Status.FAIL) if not route.is_proxy
+                                  else Status.FAIL, line(control), d, tags=["speed_fail"] + rtags))
+            return
+        if not control.ok or control.received < 256 * 1024:
+            kind, why = speedtest.verdict(control, control)
+            self._check(Check("content", title, st.sni, Status.SKIP, why, d, tags=["speed_inconclusive"] + rtags))
+            return
+        test = speedtest.measure(st.url, sni=st.sni, **kw)
+        d[f"С именем {st.sni}"] = line(test)
+        kind, why = speedtest.verdict(control, test)
+        if kind in ("throttled", "blocked") and not self.cancelled:
+            # Защита от ложного вывода: сервер мог сам плохо обслуживать любое чужое имя.
+            neutral = speedtest.measure(st.url, sni=NEUTRAL_SNI, **kw)
+            d[f"С нейтральным именем {NEUTRAL_SNI}"] = line(neutral)
+            if speedtest.verdict(control, neutral)[0] != "ok":
+                kind = "inconclusive"
+                why = ("с нейтральным именем результат такой же — сервер сам не обслуживает чужие имена, "
+                       "тест на нём непоказателен")
+        d["Вывод"] = why
+        if test.kbps is not None:
+            d["KiB/s"] = {"контроль": round(control.kbps or 0), "тест": round(test.kbps)}
+        status = {"ok": Status.OK, "throttled": Status.FAIL, "blocked": Status.FAIL}.get(kind, Status.SKIP)
+        if status == Status.FAIL and not route.is_proxy:
+            status = self._soft(status)
+        tag = {"ok": "speed_ok", "throttled": "speed_throttled", "blocked": "speed_sni_blocked"}.get(
+            kind, "speed_inconclusive")
+        self._check(Check("content", title, st.sni, status, why, d, tags=[tag] + rtags))
 
     # --- зависимости ----------------------------------------------------------
     def _discover(self):
@@ -1003,6 +1230,17 @@ class Engine:
             row.status, row.note = Status.FAIL, why
             self._finish_asset(row, Check("content", title, url, Status.FAIL, why, d, full.phases.get("total"),
                                           tags=tags))
+            return
+        if full.body_len != expected and full.content_length == full.body_len:
+            # HEAD и GET заявили разный размер, а GET доставлен целиком по своему Content-Length:
+            # объект собирается на лету и меняется между запросами — сверять повторную выборку не с чем
+            d["Примечание"] = (f"размер по HEAD {expected}, по GET {full.body_len}: объект меняется между запросами, "
+                               "сверка хвоста пропущена")
+            row.expected = full.body_len
+            row.full, row.tail, row.status = "OK", "-", Status.OK
+            row.note = "доставлен целиком по Content-Length ответа; объект меняется между запросами"
+            self._finish_asset(row, Check("content", title, url, Status.OK, row.note, d, full.phases.get("total"),
+                                          tags=["content_ok", "content_unstable"]))
             return
         if full.body_len != expected:
             row.full = "SIZE"
