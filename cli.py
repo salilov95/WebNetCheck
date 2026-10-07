@@ -53,12 +53,21 @@ def main(argv=None) -> int:
     ap.add_argument("--html", metavar="FILE")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--list-profiles", action="store_true")
+    ap.add_argument("--myip", action="store_true", help="только показать внешний IP и оператора и выйти")
     ap.add_argument("--version", action="version", version=f"WebNetCheck {__version__}")
     a = ap.parse_args(argv)
 
     if a.list_profiles:
         for k, p in profiles.items():
             print(f"{k:10} {p.name:14} {p.description}  [{p.path}]")
+        return 0
+    if a.myip:
+        from netcheck.extip import lookup
+        ext, errors = lookup(ca_file=a.ca_file)
+        if ext is None:
+            print("внешний IP не определён: " + "; ".join(errors), file=sys.stderr)
+            return 1
+        print(ext.summary)
         return 0
     profile = a.profile
     target = a.target or ""

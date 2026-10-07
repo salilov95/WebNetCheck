@@ -30,7 +30,7 @@ def worst(statuses) -> Status:
 
 # Слои в порядке модели «снизу вверх». Порядок важен для GUI и отчёта.
 LAYERS: list[tuple[str, str]] = [
-    ("proxy", "Прокси"),
+    ("proxy", "Выход в сеть"),
     ("dns", "DNS"),
     ("icmp", "ICMP"),
     ("path", "Маршрут / MTU"),

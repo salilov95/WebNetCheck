@@ -189,5 +189,25 @@ class Proxy(unittest.TestCase):
         self.assertEqual(pac_candidates(pac), ["proxy.corp:3128", "10.0.0.5:8080"])
 
 
+class ExternalIp(unittest.TestCase):
+    def test_ipinfo(self):
+        from netcheck.extip import parse_ipinfo
+        e = parse_ipinfo({"ip": "198.51.100.7", "city": "Amsterdam", "country": "NL", "org": "AS3292 TDC Holding A/S"})
+        self.assertEqual((e.asn, e.operator), ("AS3292", "TDC Holding A/S"))
+        self.assertEqual(e.summary, "198.51.100.7 · AS3292 TDC Holding A/S · Amsterdam, NL")
+
+    def test_org_without_asn_and_empty(self):
+        from netcheck.extip import parse_ipify, parse_ipinfo, split_org
+        self.assertEqual(split_org("Some ISP"), ("", "Some ISP"))
+        self.assertIsNone(parse_ipinfo({"error": "rate limit"}))
+        self.assertEqual(parse_ipify({"ip": "198.51.100.7"}).summary, "198.51.100.7")
+
+    def test_differs_diagnosis(self):
+        r = report(Check("proxy", "x", "y", Status.INFO, details={"Напрямую": "A", "Через прокси": "B"},
+                         tags=["extip_differs"]),
+                   Check("http", "GET", "u", Status.OK, tags=["http_ok", "direct"]))
+        self.assertIn("Браузер и прямое подключение выходят в интернет по-разному", titles(r))
+
+
 if __name__ == "__main__":
     unittest.main()

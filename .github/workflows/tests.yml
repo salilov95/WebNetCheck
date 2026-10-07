@@ -26,3 +26,9 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: CLI smoke test
         run: python cli.py --list-profiles
+      # Needs the internet and third-party services, so it never fails the build.
+      - name: Network smoke test
+        continue-on-error: true
+        run: |
+          python cli.py --myip
+          python cli.py https://example.com/ --only extip,dns,icmp,tcp,tls,http

@@ -51,6 +51,7 @@ python -m venv .venv
 | Слой | Как | Что ловит |
 |---|---|---|
 | Прокси | Реестр WinINET, PAC (`AutoConfigURL`), `netsh winhttp`, переменные окружения | Какой маршрут реально у системы; кандидаты PROXY из PAC |
+| Внешний IP | Запрос к ipinfo.io, при отказе — ifconfig.co, затем ipify.org + RIPEstat; отдельно напрямую и через системный прокси | Под каким адресом и оператором (ASN) вы видны в интернете; расхождение выхода браузера (прокси/VPN) и прямого подключения |
 | DNS | Системный резолвер, DNS из настроек адаптера, 8.8.8.8 / 1.1.1.1 / 77.88.8.8 по UDP/53, DoH Google и Cloudflare; A и AAAA | Сломанный корпоративный DNS, заглушки 0.0.0.0/127.x, split-horizon, закрытый UDP/53, внутренние имена |
 | ICMP | Echo с потерями, avg, min/max, джиттером | Потери; ICMP закрыт, но TCP жив |
 | Маршрут / MTU | Параллельный traceroute с обратными именами хопов; бинарный поиск Path MTU с DF (IPv4) | Где обрывается маршрут; туннели/PPPoE/VPN с MTU < 1500 |
@@ -103,6 +104,7 @@ python cli.py https://example.com --family v4 --html report.html
 python cli.py example.com --route manual --proxy 10.0.0.1:3128
 python cli.py cdn.example.com --ip 203.0.113.10 --only dns,tcp,tls,http
 python cli.py --list-profiles
+python cli.py --myip
 ```
 
 Вывод заканчивается строками `RESULT <слой>=OK|WARN|FAIL` и `RESULT overall=…`. Коды выхода:
@@ -144,7 +146,7 @@ build_exe.bat
 python -m unittest discover -s tests
 ```
 
-25 тестов логики: поиск Path MTU, traceroute, анализ DNS, правила диагноза, разбор ресурсов страницы, настройки прокси. Сеть и Qt для них не нужны.
+28 тестов логики: поиск Path MTU, traceroute, анализ DNS, правила диагноза, разбор ресурсов страницы, настройки прокси. Сеть и Qt для них не нужны.
 
 ## Структура
 
@@ -177,6 +179,7 @@ tests/              юнит-тесты логики
 - HTTP/3 (QUIC) не проверяется — только факт анонса.
 - Path MTU ищется только для IPv4.
 - Интерфейс только на русском.
+- Внешний IP определяется запросом к сторонним сервисам. Отключается в меню «Проверки» или `--skip extip`.
 
 Если окно упадёт, стек попадёт в `%LOCALAPPDATA%\WebNetCheck\crash.log`.
 

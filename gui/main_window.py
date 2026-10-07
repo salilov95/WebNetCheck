@@ -24,6 +24,7 @@ from .widgets import DiagCard, LayerStack, RttBarDelegate, SortItem, app_icon, s
 
 CHECK_NAMES = {
     "proxy": "Настройки прокси Windows",
+    "extip": "Внешний IP и оператор",
     "dns": "DNS: системный, публичные, DoH",
     "icmp": "ICMP ping",
     "trace": "Traceroute",
@@ -241,6 +242,11 @@ class MainWindow(QMainWindow):
         r2.addWidget(self.checks_btn)
         r2.addSpacing(8)
         r2.addWidget(self.profile_desc, 1)
+        self.extip_lbl = QLabel("")
+        self.extip_lbl.setProperty("role", "muted")
+        self.extip_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.extip_lbl.setToolTip("Внешний адрес и оператор, под которыми этот компьютер виден в интернете")
+        r2.addWidget(self.extip_lbl)
         tv.addLayout(r2)
         v.addWidget(top)
 
@@ -481,6 +487,8 @@ class MainWindow(QMainWindow):
             tb.setSortingEnabled(False)
             tb.setRowCount(0)
         self.asset_rows: dict[str, int] = {}
+        if hasattr(self, "extip_lbl"):
+            self.extip_lbl.setText("")
         self.rtt_delegate.max_rtt = 1.0
         self.log.clear()
         self.stack.reset()
@@ -621,6 +629,8 @@ class MainWindow(QMainWindow):
         return g
 
     def _ev_check(self, c):
+        if "extip_direct" in c.tags or ("extip_proxy" in c.tags and not self.extip_lbl.text()):
+            self.extip_lbl.setText("Внешний IP: " + c.summary)
         self.log.appendPlainText(f"   {c.status.value:<4} {c.title} [{c.target}]: {c.summary}"
                                  + (f" ({fmt_ms(c.duration_ms)})" if c.duration_ms is not None else ""))
         g = self._group(c.layer)

@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from urllib.parse import urlsplit
 
 from . import __version__
+from . import extip
 from . import icmp as icmpmod
 from .diagnosis import diagnose
 from .discovery import discover, hosts_of, json_strings
@@ -25,7 +26,7 @@ from .proxysettings import (bypassed, env_route, pac_candidates, parse_manual, r
 from .transport import DIRECT, NetError, Route, interception_marker, open_stream, tls_wrap
 from .util import ERROR_TEXT, fmt_ms, human_bytes, ip_kind, is_ip_literal
 
-ALL_CHECKS = ("proxy", "dns", "icmp", "trace", "pmtu", "tcp", "tls", "http", "hosts", "api", "content")
+ALL_CHECKS = ("proxy", "extip", "dns", "icmp", "trace", "pmtu", "tcp", "tls", "http", "hosts", "api", "content")
 
 
 @dataclass
@@ -281,6 +282,8 @@ class Engine:
                 sysroute = pr
         if not sysroute:
             sysroute = env_route(settings)
+        if o.enabled("extip") and not self.cancelled:
+            self._external_ip(sysroute)
 
         def need(r: Route | None, what: str) -> Route:
             if r is None:
@@ -305,6 +308,34 @@ class Engine:
         if uniq[0].is_proxy:
             self._log(f"Основной маршрут: {uniq[0].label} ({uniq[0].origin})")
         return uniq
+
+    def _external_ip(self, sysroute: Route | None):
+        """Каким адресом и через какого оператора компьютер выходит в интернет."""
+        o = self.o
+        found: dict[str, extip.ExternalIP] = {}
+        for label, route in (("напрямую", DIRECT), ("через системный прокси", sysroute)):
+            if route is None or self.cancelled:
+                continue
+            ext, errors = extip.lookup(route, timeout=min(o.timeout, 5.0), ca_file=o.ca_file, cancel=self.cancel)
+            kind = "direct" if route is DIRECT else "proxy"
+            title = f"Внешний IP · {label}"
+            if ext is None:
+                self._check(Check("proxy", title, "интернет", Status.INFO,
+                                  "не определён: сервисы определения адреса недоступны",
+                                  {"Ошибки": errors}, tags=[f"extip_{kind}_fail"]))
+                continue
+            found[kind] = ext
+            self.report.environment[f"Внешний IP ({label})"] = ext.summary
+            self._check(Check("proxy", title, ext.ip, Status.INFO, ext.summary,
+                              {"Адрес": ext.ip, "ASN": ext.asn or "-", "Оператор": ext.operator or "-",
+                               "Город": ext.city or "-", "Страна": ext.country or "-",
+                               "Источник": ext.source, "Маршрут": route.label},
+                              tags=[f"extip_{kind}"]))
+        d, p = found.get("direct"), found.get("proxy")
+        if d and p and d.ip != p.ip:
+            self._check(Check("proxy", "Выход напрямую и через прокси", "интернет", Status.INFO,
+                              f"разные адреса: напрямую {d.ip}, через прокси {p.ip}",
+                              {"Напрямую": d.summary, "Через прокси": p.summary}, tags=["extip_differs"]))
 
     def _quick_resolve(self, host: str) -> tuple[list[str], list[str]]:
         if host.lower() in self.overrides:
