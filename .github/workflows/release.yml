@@ -1,7 +1,8 @@
 name: release
 
 # Builds both exe folders on Windows and attaches them to a GitHub Release
-# whenever a version tag (v1.2.3) is pushed.
+# whenever a version tag (v1.2.3) is pushed or a release with such a tag is
+# published from the GitHub UI.
 on:
   push:
     tags: ["v*"]
@@ -48,5 +49,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $v = "${{ github.ref_name }}".TrimStart("v")
-          gh release create "${{ github.ref_name }}" "WebNetCheck-$v-win64.zip" "webnetcheck-cli-$v-win64.zip" --title "WebNetCheck $v" --notes-file .github/release-notes.md --verify-tag
+          $tag = "${{ github.ref_name }}"
+          $v = $tag.TrimStart("v")
+          $assets = "WebNetCheck-$v-win64.zip", "webnetcheck-cli-$v-win64.zip"
+          # The release may already exist when it was drafted in the GitHub UI:
+          # then only attach the builds.
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $assets --clobber
+          } else {
+            gh release create $tag $assets --title "WebNetCheck $v" --notes-file .github/release-notes.md --verify-tag
+          }
