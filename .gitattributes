@@ -2,3 +2,4 @@
 *.bat text eol=crlf
 *.png binary
 *.ico binary
+*.iss text eol=crlf

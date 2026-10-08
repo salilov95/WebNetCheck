@@ -1,11 +1,17 @@
 name: release
 
-# Builds both exe folders on Windows and attaches them to a GitHub Release
-# whenever a version tag (v1.2.3) is pushed or a release with such a tag is
-# published from the GitHub UI.
+# Builds every Windows deliverable:
+#   WebNetCheck-<v>-setup.exe        installer (Inno Setup)
+#   WebNetCheck-<v>-portable.exe     single-file GUI, settings stored next to it
+#   WebNetCheck-<v>-win64.zip        GUI folder build
+#   webnetcheck-cli-<v>-win64.zip    console folder build
+#
+# A version tag (v1.2.3) attaches them to the GitHub Release; a manual run
+# (Actions -> release -> Run workflow) only keeps them as a workflow artifact.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,12 +28,28 @@ jobs:
         run: python -m pip install -r requirements.txt "pyinstaller>=6.3"
       - name: Unit tests
         run: python -m unittest discover -s tests
-      - name: Build GUI exe
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $v = python -c "import netcheck; print(netcheck.__version__)"
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$v") {
+            Write-Error "Tag ${{ github.ref_name }} does not match netcheck.__version__ ($v)"
+            exit 1
+          }
+          "v=$v" >> $env:GITHUB_OUTPUT
+      - name: Build GUI (folder)
         run: >
           pyinstaller --noconfirm --clean --windowed --name WebNetCheck
           --icon assets\webnetcheck.ico --collect-submodules dns
           --add-data "profiles;profiles" app.py
-      - name: Build CLI exe
+      - name: Build GUI (portable, one file)
+        run: >
+          pyinstaller --noconfirm --clean --windowed --onefile --name WebNetCheck
+          --distpath dist\portable --workpath build\portable
+          --icon assets\webnetcheck.ico --collect-submodules dns
+          --add-data "profiles;profiles" app.py
+      - name: Build CLI (folder)
         run: >
           pyinstaller --noconfirm --clean --console --name webnetcheck-cli
           --icon assets\webnetcheck.ico --collect-submodules dns --exclude-module PySide6
@@ -35,23 +57,61 @@ jobs:
       - name: Smoke test and package
         shell: pwsh
         run: |
+          $v = "${{ steps.version.outputs.v }}"
           Copy-Item profiles dist\WebNetCheck\profiles -Recurse -Force
           Copy-Item profiles dist\webnetcheck-cli\profiles -Recurse -Force
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md dist\WebNetCheck\
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md dist\webnetcheck-cli\
           & dist\webnetcheck-cli\webnetcheck-cli.exe --list-profiles
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          $v = "${{ github.ref_name }}".TrimStart("v")
-          Compress-Archive -Path dist\WebNetCheck -DestinationPath "WebNetCheck-$v-win64.zip"
-          Compress-Archive -Path dist\webnetcheck-cli -DestinationPath "webnetcheck-cli-$v-win64.zip"
+          New-Item -ItemType Directory out -Force | Out-Null
+          Copy-Item dist\portable\WebNetCheck.exe "out\WebNetCheck-$v-portable.exe"
+          Compress-Archive -Path dist\WebNetCheck -DestinationPath "out\WebNetCheck-$v-win64.zip"
+          Compress-Archive -Path dist\webnetcheck-cli -DestinationPath "out\webnetcheck-cli-$v-win64.zip"
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.v }}"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          & $iscc "/DAppVersion=$v" installer\webnetcheck.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Copy-Item "dist\WebNetCheck-$v-setup.exe" out\
+      - name: Installer smoke test
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.v }}"
+          $dir = "$env:RUNNER_TEMP\wnc-install"
+          $p = Start-Process "out\WebNetCheck-$v-setup.exe" -Wait -PassThru `
+            -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=$dir"
+          if ($p.ExitCode -ne 0) { Write-Error "setup exit code $($p.ExitCode)"; exit 1 }
+          foreach ($f in "WebNetCheck.exe", "cli\webnetcheck-cli.exe", "profiles\discord.toml", "unins000.exe") {
+            if (-not (Test-Path "$dir\$f")) { Write-Error "missing $f after install"; exit 1 }
+          }
+          & "$dir\cli\webnetcheck-cli.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $u = Start-Process "$dir\unins000.exe" -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES"
+          if ($u.ExitCode -ne 0) { Write-Error "uninstall exit code $($u.ExitCode)"; exit 1 }
+          Start-Sleep -Seconds 3
+          if (Test-Path "$dir\WebNetCheck.exe") { Write-Error "uninstall left WebNetCheck.exe"; exit 1 }
+          Get-ChildItem out | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WebNetCheck-${{ steps.version.outputs.v }}-windows
+          path: out/*
+          retention-days: 30
       - name: Publish release
+        if: github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $v = $tag.TrimStart("v")
-          $assets = "WebNetCheck-$v-win64.zip", "webnetcheck-cli-$v-win64.zip"
+          $v = "${{ steps.version.outputs.v }}"
+          $assets = Get-ChildItem out | ForEach-Object { $_.FullName }
           # The release may already exist when it was drafted in the GitHub UI:
           # then only attach the builds.
           gh release view $tag *> $null
