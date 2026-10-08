@@ -397,5 +397,20 @@ class Profiles(unittest.TestCase):
         self.assertEqual({st.sni for st in tests}, {"test.googlevideo.com"})
 
 
+class Storage(unittest.TestCase):
+    def test_onefile_detection(self):
+        from gui.storage import is_onefile
+        # onefile: временная папка вне папки exe
+        self.assertTrue(is_onefile("/apps/WebNetCheck.exe", "/tmp/_MEI12345"))
+        # onedir (PyInstaller 6): файлы в _internal рядом с exe
+        self.assertFalse(is_onefile("/apps/wnc/WebNetCheck.exe", "/apps/wnc/_internal"))
+        self.assertFalse(is_onefile("/apps/wnc/WebNetCheck.exe", None))
+
+    def test_not_frozen_is_not_portable(self):
+        from gui.storage import is_onefile, portable_dir
+        self.assertFalse(is_onefile())
+        self.assertIsNone(portable_dir())
+
+
 if __name__ == "__main__":
     unittest.main()

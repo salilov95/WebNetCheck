@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import time
 
-from PySide6.QtCore import QEvent, QObject, QSettings, QStandardPaths, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QStandardPaths, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                                QFileDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
@@ -19,6 +19,7 @@ from netcheck.profiles import load_all
 from netcheck.report import save_html, save_json, summary_text
 from netcheck.util import fmt_ms, human_bytes
 
+from .storage import make_settings
 from .theme import DARK, LIGHT, MONO_FONT, qss, status_color
 from .widgets import DiagCard, LayerStack, RttBarDelegate, SortItem, app_icon, status_icon
 
@@ -119,7 +120,7 @@ class SettingsDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.settings = QSettings("WebNetCheck", "WebNetCheck")
+        self.settings = make_settings()
         self.persist = True
         self.t = DARK if self.settings.value("theme", "dark") == "dark" else LIGHT
         self.profiles = load_all()

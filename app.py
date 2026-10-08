@@ -10,10 +10,8 @@ import traceback
 
 
 def _crash_log_path() -> str:
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    folder = os.path.join(base, "WebNetCheck")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, "crash.log")
+    from gui.storage import crash_log_path
+    return crash_log_path()
 
 
 def _excepthook(exc_type, exc, tb):
